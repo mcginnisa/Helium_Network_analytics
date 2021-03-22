@@ -9,7 +9,12 @@ import requests
 import datetime
 import statistics 
 # import xlsxwriter
-import pandas 
+import pandas
+import json
+import numpy as np
+import calendar 
+from dateutil.rrule import rrule, MONTHLY
+import arrow
 
 def hnt_mined_past_days(hotspot_addr,past_days):
     #example :# print(hnt_mined_past_days("116y7S1xPcYoybvP8pgVNjfQVCQNN9QkhiWUnSB9kfgbGcczJBa",30))
@@ -30,6 +35,25 @@ def hnt_mined_past_days(hotspot_addr,past_days):
     
     return response.json()['data']['total']
 
+def hnt_mined_timespan(hotspot_addr,start_time,end_time):
+    try:
+        request_string = "https://api.helium.io/v1/hotspots/" + \
+        hotspot_addr + "/rewards/sum?min_time=" + start_time + \
+        "&max_time=" + end_time
+        print('API income request success')
+        response = requests.get(request_string)
+        return response.json()['data']['total']
+    except:
+        print('API failed on income request')
+        return np.NAN
+    
+    # print(request_string)
+    
+    
+    # print(response.json())
+    
+    
+
 def get_hotspot_addrs_in_city(city_addr):
     #example print(len(get_hotspot_addrs_in_city('c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM')))
     # of hotspots in San Diego
@@ -49,6 +73,8 @@ def get_hotspot_addrs_in_city(city_addr):
     # response.json()['data']['total']
     
     # return response.json()['data']['total']
+
+    
     
 def get_list_of_hnt_income(hotspot_addr_list):
     hnt_income_list = []
@@ -73,16 +99,12 @@ def update_income_spreedsheet(hnt_income_list,city_name):
         print('except occured')
         df_income = pandas.DataFrame({city_name:hnt_income_list})
     
-        
-        
-    
-    
-    
     df_income.to_excel('city_income.xls',index=False)
-    
+
     
 def city_search(list_of_city_name_strings):
-    city_string_dict = {'San Diego':'c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM'}
+    # city_string_dict = {'San Diego':'c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM'}
+    city_string_dict = {}
     for i in range(len(list_of_city_name_strings)):
         try:
             request_string = "https://api.helium.io/v1/cities?search=" + list_of_city_name_strings[i]
@@ -98,6 +120,34 @@ def city_search(list_of_city_name_strings):
     df.to_excel('city_keys.xls')
     return city_string_dict
 
+
+def save_city_json(city_name_addr_dict):
+    
+    # city_hotspot_dict = {}
+    try:
+        with open('city_json.json') as json_file:
+            old_json = json.load(json_file)
+    except:
+        old_json = {}
+
+    for city_name in city_name_addr_dict.keys():
+        print('now trying ' + str(city_name))
+    # city_name_dict = {'San Diego':'c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM'}
+        # request_string = "https://api.helium.io/v1/cities/c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM/hotspots"
+        if city_name in old_json.keys():
+            continue
+        else:
+            city_addr = city_name_addr_dict[city_name]
+            request_string = "https://api.helium.io/v1/cities/" + \
+            city_addr + "/hotspots"
+            response = requests.get(request_string)
+            old_json[city_name] = {}
+            old_json[city_name]['data'] = response.json()['data']
+            old_json[city_name]['address'] = city_addr
+            
+    with open('city_json.json', 'w') as f:
+        json.dump(old_json, f)
+
 def make_city_spreadsheet(list_of_city_name_strings):
     city_dict = city_search(list_of_city_name_strings)
     for i in range(len(list_of_city_name_strings)):
@@ -108,9 +158,262 @@ def make_city_spreadsheet(list_of_city_name_strings):
         # print(hotspot_income_list)
         update_income_spreedsheet(hotspot_income_list,list_of_city_name_strings[i])
         
-        
-make_city_spreadsheet(['San Francisco','Dallas','Los Angeles','San Diego','Chicago','Seattle','Atlanta'])
+def get_iso_month_bounds_bt_dates(start_year,start_month,end_year,end_month):
+    #insert years and months as ints
+    #get out list of iso date bounds, with start day of month, end day of month, start day of month, end day of month, etc
+    # from datetime import datetime
 
+    start = datetime.datetime(start_year, start_month, 1)
+    end = datetime.datetime(end_year, end_month, 1)
+    list_of_dates_iter = [(d.month, d.year) for d in rrule(MONTHLY, dtstart=start, until=end)]
+    
+    iso_month_bounds = []
+    for m in list_of_dates_iter:
+        # datetime.datetime.strptime("2013-1-25", '%Y-%m-%d').isoformat()
+        # iso_month_bounds.append('2021-03-06T00:50:37.262Z')
+        iso_month_bounds.append(datetime.datetime.strptime(str(m[1]) +'-'+str(m[0])+'-1-0-0-0', '%Y-%m-%d-%H-%M-%S').isoformat())
+        iso_month_bounds.append(datetime.datetime.strptime(str(m[1]) +'-'+str(m[0])+'-'+str(calendar.monthrange(m[1],m[0])[1])+'-23-59-59', '%Y-%m-%d-%H-%M-%S').isoformat())
+    return iso_month_bounds
+
+def iso_to_dt(iso):
+    # return datetime.datetime.strptime(iso, "%Y-%m-%dT%H:%M:%S%z")
+    return arrow.get(iso).datetime
+
+def update_json_with_income_by_month(start_year=2013,start_month=11,end_year=2021,end_month=3):
+    date_list = get_iso_month_bounds_bt_dates(start_year,start_month,end_year,end_month)
+    with open('city_json.json') as json_file:
+        old_json = json.load(json_file)
+    
+    for city_name in old_json.keys():
+        for hotspot in range(len(old_json[city_name]['data'])):
+            if 'income_by_month' in old_json[city_name]['data'][hotspot].keys():
+                continue
+            old_json[city_name]['data'][hotspot]['income_by_month'] = {}
+            date_added_to_network_iso = old_json[city_name]['data'][hotspot]['timestamp_added']
+            print(date_added_to_network_iso)
+            for i in range(len(date_list)-1):
+                if (iso_to_dt(date_list[i+1]) - iso_to_dt(date_list[i])) < datetime.timedelta(seconds = 5):
+                    continue
+                if date_list[i] in old_json[city_name]['data'][hotspot]['income_by_month'].keys():
+                    continue
+                if iso_to_dt(date_added_to_network_iso) < iso_to_dt(date_list[i+1]):
+                    income = hnt_mined_timespan(old_json[city_name]['data'][hotspot]['address'],date_list[i],date_list[i+1])
+                    old_json[city_name]['data'][hotspot]['income_by_month'][date_list[i]] = income
+                    print('date ' + date_list[i] + ' included')
+                else:
+                    print('date ' + date_list[i] + ' thrown out')
+            with open('city_json.json', 'w') as f:
+                json.dump(old_json, f)
+                    
+
+ 
+def update_json_with_city_income():
+
+        
+    with open('city_json.json') as json_file:
+        old_json = json.load(json_file)
+        
+    
+    
+    for city in old_json:
+        if 'total_income_by_month' in old_json[city].keys():
+            continue
+        old_json[city]['total_income_by_month'] = {}
+        for date in get_iso_month_bounds_bt_dates(start_year=2013,start_month=11,end_year=2021,end_month=3):
+            # print(date)
+            # income_sum_for_date = 0
+            for hotspot in old_json[city]['data']:
+                # old_json[city]['total_income_by_month'] = {}
+                if date in hotspot['income_by_month'].keys():
+                    print(str(date) + '   ' + str(hotspot['income_by_month'][date]))
+                    if hotspot['income_by_month'][date] > -1:
+                        pass
+                    else:
+                        continue
+                    # income_sum_for_date += hotspot['income_by_month'][date]
+                    if date in old_json[city]['total_income_by_month'].keys():
+    
+                        old_json[city]['total_income_by_month'][date] += hotspot['income_by_month'][date]
+                    else:
+                        old_json[city]['total_income_by_month'][date] = hotspot['income_by_month'][date]
+            # old_json[city]['total_income_by_month'][date] = income_sum_for_date
+    
+    with open('city_json.json', 'w') as f:
+        json.dump(old_json, f)
+
+
+def write_city_monthly_income_excel():
+    date_list = get_iso_month_bounds_bt_dates(start_year=2013,start_month=11,end_year=2021,end_month=3)
+    # date_list.remove([i for i in date_list if '59' in i])
+    date_list = [i for i in date_list if ':00' in i] #isolate only start dates
+    
+    with open('city_json.json') as json_file:
+        old_json = json.load(json_file)
+    
+    city_list = old_json.keys()
+    
+    # two_d_mat = np.array([]).reshape(2,2)
+    
+    
+    #pad the lists on top with NaN and append to 2d np mat
+    first = True
+    for city in old_json:
+        array_of_incomes=np.pad(pad_width = (len(date_list)-len(list(old_json[city]['total_income_by_month'].values())),0) ,mode='constant',constant_values=np.NAN,array=list(old_json[city]['total_income_by_month'].values()))
+        if first:
+            two_d_mat = array_of_incomes
+            # two_d_mat = np.expand_dims(two_d_mat, axis=1)
+            first=False
+        else:
+            two_d_mat = np.append(arr=two_d_mat,values=array_of_incomes)
+    two_d_mat = np.reshape(order='F',a=two_d_mat,newshape=(len(date_list),len(city_list)))
+    
+    df = pandas.DataFrame(data=two_d_mat,index=date_list,columns=city_list)
+    
+    df.to_excel('total_city_income_by_month.xls',na_rep='NaN')
+    
+    
+    
+def do_list_thing():
+        
+    with open('city_json.json') as json_file:
+        old_json = json.load(json_file)
+        
+    date_list = get_iso_month_bounds_bt_dates(start_year=2013,start_month=11,end_year=2021,end_month=3)
+        # date_list.remove([i for i in date_list if '59' in i])
+    date_list = [i for i in date_list if ':00' in i] #isolate only start dates
+    
+    for city in old_json:
+        old_json[city]['hotspots_by_month'] = {}
+        
+        # first = True
+        for date in date_list:
+            # if first:
+            old_json[city]['hotspots_by_month'][date] = 0
+                # first = False
+            for hotspot in old_json[city]['data']:
+                if iso_to_dt(hotspot['timestamp_added']) < iso_to_dt(date):
+                    old_json[city]['hotspots_by_month'][date] += 1
+    
+    with open('city_json.json', 'w') as f:
+        json.dump(old_json, f)
+    
+
+def excel_thing():
+        
+    with open('city_json.json') as json_file:
+            old_json = json.load(json_file)
+    city_list = old_json.keys()
+    date_list = get_iso_month_bounds_bt_dates(start_year=2013,start_month=11,end_year=2021,end_month=3)
+    # date_list.remove([i for i in date_list if '59' in i])
+    date_list = [i for i in date_list if ':00' in i] #isolate only start dates
+    
+    first = True
+    for city in old_json:
+        array_of_incomes=list(old_json[city]['hotspots_by_month'].values()) 
+        if first:
+            two_d_mat = array_of_incomes
+            # two_d_mat = np.expand_dims(two_d_mat, axis=1)
+            first=False
+        else:
+            two_d_mat = np.append(arr=two_d_mat,values=array_of_incomes)
+    two_d_mat = np.reshape(order='F',a=two_d_mat,newshape=(len(date_list),len(city_list)))
+    
+    df = pandas.DataFrame(data=two_d_mat,index=date_list,columns=city_list)
+    
+    df.to_excel('hotspot_growth_by_month.xls',na_rep='NaN')
+
+    
+save_city_json(city_search(['Beijing','San Francisco','Dallas','Los Angeles','San Diego','Chicago','Seattle','Atlanta','London','Berlin','Paris','Amsterdam','Madrid','Austin','Lisboa','Boston','Minneapolis','Denver','🇷🇴București','Zagreb','Stockholm','Miami']))
+# save_city_json({'New York':'bmV3IHlvcmtuZXcgeW9ya3VuaXRlZCBzdGF0ZXM'})
+
+update_json_with_income_by_month()
+update_json_with_city_income()
+do_list_thing()
+
+
+# yes = iso_to_dt('2014-05-01T00:00:00') < iso_to_dt('2020-10-13T13:43:16.000000Z')
+    
+    
+    
+    
+# update_json_with_city_income()
+# write_city_monthly_income_excel()
+
+
+
+
+
+
+    # test = np.append(axis=0,arr=two_d_mat,values=np.pad(array=np.array(old_json[city]['total_income_by_month']),pad_width=len(date_list)))
+    # for date in old_json[city]['total_income_by_month']:
+    #     for other_date in date_list:
+    #         if date = other
+
+    # list_of_incomes=np.pad(pad_width = (len(date_list)-len(list(old_json[city]['total_income_by_month'].values())),0) ,mode='constant',constant_values=np.NAN,array=list(old_json[city]['total_income_by_month'].values()))
+
+# with open('city_json.json') as json_file:
+#     old_json = json.load(json_file)
+
+# for city in old_json:
+#     df_income_by_month = pandas.DataFrame(columns=old_json.keys(),index=old_json[city]['total_income_by_month'].keys,data=)
+
+# df_income_by_month.to_excel('city_income_by_month.xls',index=False)
+
+
+# save_city_json(city_search(['Beijing','San Francisco','Dallas','Los Angeles','San Diego','Chicago','Seattle','Atlanta','London','Berlin','Paris','Amsterdam','Madrid']))
+# save_city_json(city_search(['Beijing']))
+
+# update_json_with_income_by_month()
+# update_json_with_city_income()
+
+# data = np.zeros((122, 40, 30))
+
+# writer = pd.ExcelWriter('file.xlsx', engine='xlsxwriter')
+
+# for i in range(0, 30):
+#     df = pd.DataFrame(data[:,:,i])
+#     df.to_excel(writer, sheet_name='bin%d' % i)
+
+# writer.save()
+
+
+# datetime_obj_hopefully = iso_to_dt(get_iso_month_bounds_bt_dates(2012,1,2012,5)[0])
+# date_list = get_iso_month_bounds_bt_dates(start_year=2013,start_month=11,end_year=2021,end_month=3)
+
+# = get_iso_month_bounds_bt_dates(2012,1,2012,5)
+# data = np.zeros((122, 40, 30))
+
+# writer = pandas.ExcelWriter('test_file_lol.xlsx', engine='xlsxwriter')
+
+# for i in range(0, 30):
+#     df = pandas.DataFrame(data[:,:,i])
+#     df.to_excel(writer, sheet_name='bin%d' % i)
+
+# writer.save()
+        
+        
+        
+
+        
+        
+# make_city_spreadsheet(['London','Beijing','Berlin','Amsterdam'])
+
+
+#manually add city:
+# hotspot_addr_list = get_hotspot_addrs_in_city('bWVndXJvIGNpdHl0xY1recWNLXRvamFwYW4')
+# hotspot_income_list = get_list_of_hnt_income(hotspot_addr_list)
+# update_income_spreedsheet(hotspot_income_list,'Tōkyō-to')
+
+# city_name_dict = {'San Diego':'c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM'}
+# city_hotspot_dict = {}
+# request_string = "https://api.helium.io/v1/cities/c2FuIGRpZWdvY2FsaWZvcm5pYXVuaXRlZCBzdGF0ZXM/hotspots"
+# response = requests.get(request_string)
+# city_hotspot_dict['data'] = response.json()['data']
+# city_hotspot_dict['city_address'] = city_name_dict
+
+# import json
+# with open('city_json.json', 'w') as f:
+#     json.dump(city_hotspot_dict, f)
 
 # old debug stuff below:
 
